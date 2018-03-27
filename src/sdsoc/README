@@ -1,0 +1,4 @@
+SDSoC reference and hardware source files
+
+	reference:	C/C++ source files
+	hardware:	SDSoC build files (eg. C-stubs)
