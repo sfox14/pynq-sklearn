@@ -3,6 +3,8 @@ import numpy as np
 import abc
 import cffi
 
+xlnk = Xlnk()
+
 
 class PynqMixin(metaclass=abc.ABCMeta):
     """ Mixin class for all PYNQ estimators in scikit-learn """
@@ -29,6 +31,18 @@ class PynqMixin(metaclass=abc.ABCMeta):
         xlnk.xlnk_reset()
         return
 
+    def copy(self, X, dtype=np.int32):
+        """
+        :param X: np.array
+        :return: physically contiguous np.array
+        """
+        xin = X.flatten()
+        dataBuffer = self.xlnk.cma_array(shape=len(xin), dtype=dtype)
+        for i, data in enumerate(xin):
+            dataBuffer[i] = data
+        return dataBuffer
+
+
     def mem_init(self, memSize=1024, dtype="int"):
         """ Allocate CMA buffer """
         buf = self.xlnk.cma_alloc(memSize)
@@ -52,7 +66,7 @@ class PynqMixin(metaclass=abc.ABCMeta):
         pass
 
     @abc.abstractmethod
-    def run(self):
+    def run(self, a, b, din, dout, dlen):
         """ call interface library """
         pass
     

@@ -6,6 +6,7 @@ import os
 import inspect
 import numpy as np
 import time
+import ctypes
 
 from ..base import PynqMixin
 from sklearn.linear_model import LinearRegression
@@ -13,6 +14,9 @@ from sklearn.linear_model import LinearRegression
 ROOT_DIR = os.path.dirname(os.path.realpath(__file__))
 BIT_DIR = os.path.join(ROOT_DIR, "..", "bitstreams")
 LIB_DIR = os.path.join(ROOT_DIR, "..", "libraries")
+BIT_WIDTH = 32
+FRAC_WIDTH = 24
+MAX_OUT = 1000
 
 
 class PynqLinearRegression(PynqMixin, LinearRegression):
@@ -30,7 +34,7 @@ class PynqLinearRegression(PynqMixin, LinearRegression):
 		coef_: array, shape (n_features, ) or (n_targets, n_features)
 			Estimated coefficients for the linear regression problem. Our
 			hardware accelerator is limited to problems with
-			n_features=13 and n_targets=1.
+			n_features=32 and n_targets=10.
 			*** FUTURE WORK=Software configurable FPGA Overlay ***
 		intercept_: array
 			Independent term in the linear model
@@ -46,12 +50,10 @@ class PynqLinearRegression(PynqMixin, LinearRegression):
 		# print("{} = {}".format(arg, val))
 
 		""" properties of fixed hw accelerator """
-		# hwargs = {"bitstream": os.path.join(BIT_DIR, "linear_simple.bit"),
-		#          "library": os.path.join(LIB_DIR, "liblreg_simple.so")}
-		#hwargs = {"bitstream": os.path.join(BIT_DIR, "linear_sg.bit"),
-		#		  "library": os.path.join(LIB_DIR, "liblreg_sg.so")}
-		hwargs = {"bitstream": os.path.join(BIT_DIR, "linear_32104.bit"),
-				  "library": os.path.join(LIB_DIR, "liblreg32104.so")}
+		hwargs = {"bitstream": os.path.join(BIT_DIR,
+											"linear_32104_fixed_final.bit"),
+				  "library": os.path.join(LIB_DIR,
+										  "liblreg32104_fixed_final.so")}
 		self.input_width = 32 #13
 		self.output_width = 10 #1
 
@@ -67,21 +69,26 @@ class PynqLinearRegression(PynqMixin, LinearRegression):
 			if self.check_array(x, y) is not True:
 				raise ValueError("HW Accelerator does not fit the input data")
 
-		self.coef_ = (self.coef_ * (2 ** 20)).astype("int32")
-		self.intercept_ = (self.intercept_ * (2 ** 20)).astype("int32")
+		# copy to xlnk cma buffer
+		self.coef_hw = self.copy(self.coef_ * (
+				1<<FRAC_WIDTH), dtype=np.int32)
+		self.intercept_hw = self.copy(self.intercept_*(1<<FRAC_WIDTH), dtype=np.int32)
 
+		# allocate outBuffer
+		self.outBuffer = self.xlnk.cma_array(shape=(MAX_OUT * 10),
+											 dtype=np.int32)
 		return
 
 	def predict(self, x):
 		if self.hw_accel:
-			datalen = len(x)
+			datalen = int( len(x)/self.input_width )
 			# HW is limited to batch size = 1000
 			if datalen > 1000:
 				raise RuntimeError("Batch size exceeds HW accelerator")
-			a, b, din, dout = self.preprocess(x, len(x))
-			out = self.run(a, b, din, dout, len(x))
-			return np.array(out).reshape(-1, self.output_width)
-
+			self.run(self.coef_hw.pointer, self.intercept_hw.pointer,
+					 x.pointer, self.outBuffer.pointer, datalen)
+			return self.outBuffer[:datalen * self.output_width].reshape(-1,
+															self.output_width)
 		else:
 			return super(PynqLinearRegression, self).predict(x)
 
@@ -96,50 +103,17 @@ class PynqLinearRegression(PynqMixin, LinearRegression):
 
 	@property
 	def ffi_interface(self):
-		# return """ void _p0_LinReg_1_noasync(float x[13000], float a[13],
-		# float b, float output[1000], int datalen); """
 		return """ void _p0_LinReg_1_noasync(int *x, int a[320], int b[10], int *output, int datalen); """
 
 	def config(self):
 		pass
 
-	def preprocess(self, x, bsize):
-		a, b, din, dout = self.allocate_mem(bsize)
-		# self.coef_
-		coef_hw = self.coef_.flatten().astype(np.int32)
-		for i in range(0, self.input_width*self.output_width):
-			a[i] = coef_hw[i]
-		# self.intercept_
-		try:
-			intc_hw = self.intercept_.flatten().astype(np.int32)
-			for i in range(0, self.output_width):
-				b[i] = intc_hw[i]
-		except:
-			b = float(self.intercept_)
-
-		# input data
-		x_hw = x.flatten().astype(np.int32)
-		for i in range(bsize * self.input_width):
-			din[i] = x_hw[i]
-		return a, b, din, dout
-
-	def allocate_mem(self, bsize):
-		# self.coef_
-		a = self.mem_init(self.input_width * self.output_width * 4, "int")
-		# self.intercept_
-		b = self.mem_init(self.output_width * 4, "int")
-		# input and output data
-		din = self.mem_init(bsize * self.input_width * 4, "int")
-		dout = self.mem_init(bsize * self.output_width * 4, "int")
-		return a, b, din, dout
+	def preprocess(self):
+		pass
 
 	def run(self, a, b, din, dout, dlen):
-		print("Offloading predict to FPGA ...")
-
-		if any("cdata" not in elem for elem in [str(din), str(a), str(b), str(dout)]):
+		if any("cdata" not in elem for elem in [str(din), str(a), str(b),
+												str(dout)]):
 			raise RuntimeError("Unknown buffer type!")
 		self.interface._p0_LinReg_1_noasync(din, a, b, dout, dlen)
-		out = []
-		for i in range(self.output_width*dlen):
-			out.append(dout[i])
-		return out
+
