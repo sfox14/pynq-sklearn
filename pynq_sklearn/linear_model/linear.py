@@ -15,7 +15,7 @@ ROOT_DIR = os.path.dirname(os.path.realpath(__file__))
 BIT_DIR = os.path.join(ROOT_DIR, "..", "bitstreams")
 LIB_DIR = os.path.join(ROOT_DIR, "..", "libraries")
 BIT_WIDTH = 32
-FRAC_WIDTH = 24
+FRAC_WIDTH = 20
 MAX_OUT = 1000
 
 
@@ -50,12 +50,10 @@ class PynqLinearRegression(PynqMixin, LinearRegression):
 		# print("{} = {}".format(arg, val))
 
 		""" properties of fixed hw accelerator """
-		hwargs = {"bitstream": os.path.join(BIT_DIR,
-											"linear_32104_fixed_final.bit"),
-				  "library": os.path.join(LIB_DIR,
-										  "liblreg32104_fixed_final.so")}
-		self.input_width = 32 #13
-		self.output_width = 10 #1
+		hwargs = {"bitstream": os.path.join(BIT_DIR, "linear_32_10_sg.bit"),
+				  "library": os.path.join(LIB_DIR, "liblreg_32_10_sg.so")}
+		self.input_width = 32
+		self.output_width = 10
 
 		""" multiple inheritance """
 		super(PynqLinearRegression, self).__init__(**hwargs, **kwargs)
@@ -70,9 +68,10 @@ class PynqLinearRegression(PynqMixin, LinearRegression):
 				raise ValueError("HW Accelerator does not fit the input data")
 
 		# copy to xlnk cma buffer
-		self.coef_hw = self.copy(self.coef_ * (
-				1<<FRAC_WIDTH), dtype=np.int32)
-		self.intercept_hw = self.copy(self.intercept_*(1<<FRAC_WIDTH), dtype=np.int32)
+		self.coef_hw = self.copy_array(self.coef_ * (1<<FRAC_WIDTH),
+									   dtype=np.int32)
+		self.intercept_hw = self.copy_array(self.intercept_*(1<<FRAC_WIDTH),
+									   dtype=np.int32)
 
 		# allocate outBuffer
 		self.outBuffer = self.xlnk.cma_array(shape=(MAX_OUT * 10),

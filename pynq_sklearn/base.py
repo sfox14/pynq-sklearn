@@ -31,7 +31,7 @@ class PynqMixin(metaclass=abc.ABCMeta):
         xlnk.xlnk_reset()
         return
 
-    def copy(self, X, dtype=np.int32):
+    def copy_array(self, X, dtype=np.int32):
         """
         :param X: np.array
         :return: physically contiguous np.array
@@ -43,27 +43,10 @@ class PynqMixin(metaclass=abc.ABCMeta):
         return dataBuffer
 
 
-    def mem_init(self, memSize=1024, dtype="int"):
-        """ Allocate CMA buffer """
-        buf = self.xlnk.cma_alloc(memSize)
-        return self.xlnk.cma_cast(buf, dtype)
-
     @abc.abstractmethod
     def ffi_interface(self):
         pass
-    
-    @abc.abstractmethod
-    def config(self):
-        """ reconfigure the overlay at runtime
-         eg. adjust state machine, flip switches, load hw parameters
-                    *** FUTURE WORK ***
-        """
-        pass
 
-    @abc.abstractmethod
-    def preprocess(self):
-        """ preprocess numpy arrays and allocate CMA buffers """
-        pass
 
     @abc.abstractmethod
     def run(self, a, b, din, dout, dlen):
