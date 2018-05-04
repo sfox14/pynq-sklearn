@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    table, th, td
+    {
+      border-collapse:collapse;
+      border:1px solid black;
+    }
+    th, td
+    {
+      padding:5px;
+    }
+    p
+    {
+      font-size:200%
+    }
+  </style>
+  <title> Data Motion Network Report </title>
+</head>
+<body>
+<p>Partition 0</p>
+<table>
+<caption><b><font size="5">Data Motion Network</font></b></caption>
+<tr>
+<th>Accelerator</th>
+<th>Argument</th>
+<th>IP Port</th>
+<th>Direction</th>
+<th>Declared Size(bytes)</th>
+<th>Pragmas</th>
+<th>Connection</th>
+</tr>
+<tr>
+<td>LinReg_1</td>
+<td>x</td>
+<td>x_V</td>
+<td>IN</td>
+<td>0*4</td>
+<td><ul>
+<li>length:((datalen*32))</li>
+<li>mem_attribute:PHYSICAL_CONTIGUOUS</li>
+<li>data_mover:AXIDMA_SIMPLE</li>
+</ul>
+</td>
+<td>ps7_0_S_AXI_ACP:AXIDMA_SIMPLE</td>
+</tr>
+<td></td>
+<td>a</td>
+<td>a_V_PORTA</td>
+<td>IN</td>
+<td>320*4</td>
+<td><ul>
+<li>mem_attribute:PHYSICAL_CONTIGUOUS</li>
+<li>data_mover:AXIDMA_SIMPLE</li>
+</ul>
+</td>
+<td>ps7_0_S_AXI_ACP:AXIDMA_SIMPLE</td>
+</tr>
+<td></td>
+<td>b</td>
+<td>b_V_PORTA</td>
+<td>IN</td>
+<td>10*4</td>
+<td><ul>
+<li>mem_attribute:PHYSICAL_CONTIGUOUS</li>
+<li>data_mover:AXIDMA_SIMPLE</li>
+</ul>
+</td>
+<td>ps7_0_S_AXI_ACP:AXIDMA_SIMPLE</td>
+</tr>
+<td></td>
+<td>output</td>
+<td>output_V</td>
+<td>OUT</td>
+<td>0*4</td>
+<td><ul>
+<li>length:((datalen*10))</li>
+<li>mem_attribute:PHYSICAL_CONTIGUOUS</li>
+<li>data_mover:AXIDMA_SIMPLE</li>
+</ul>
+</td>
+<td>ps7_0_S_AXI_ACP:AXIDMA_SIMPLE</td>
+</tr>
+<td></td>
+<td>datalen</td>
+<td>datalen</td>
+<td>IN</td>
+<td>4</td>
+<td><ul>
+</ul>
+</td>
+<td>ps7_0_M_AXI_GP1:AXILITE:0xC</td>
+</tr>
+<tr>
+<td>RandomProjection_1</td>
+<td>x</td>
+<td>x_V</td>
+<td>IN</td>
+<td>0*4</td>
+<td><ul>
+<li>length:((datalen*128))</li>
+<li>mem_attribute:PHYSICAL_CONTIGUOUS</li>
+<li>data_mover:AXIDMA_SIMPLE</li>
+</ul>
+</td>
+<td>ps7_0_S_AXI_ACP:AXIDMA_SIMPLE</td>
+</tr>
+<td></td>
+<td>output</td>
+<td>output_V</td>
+<td>OUT</td>
+<td>0*4</td>
+<td><ul>
+<li>length:((datalen*32))</li>
+<li>mem_attribute:PHYSICAL_CONTIGUOUS</li>
+<li>data_mover:AXIDMA_SIMPLE</li>
+</ul>
+</td>
+<td>ps7_0_S_AXI_ACP:AXIDMA_SIMPLE</td>
+</tr>
+<td></td>
+<td>datalen</td>
+<td>datalen</td>
+<td>IN</td>
+<td>4</td>
+<td><ul>
+</ul>
+</td>
+<td>ps7_0_M_AXI_GP1:AXILITE:0xC</td>
+</tr>
+</table>
+
+<table>
+<caption><b><font size="5">Accelerator Callsites</font></b></caption>
+<tr>
+<th>Accelerator</th>
+<th>Callsite</th>
+<th>IP Port</th>
+<th>Transfer Size(bytes)</th>
+<th>Paged or Contiguous</th>
+<th>Datamover Setup Time(CPU cycles)</th>
+<th>Transfer Time(CPU cycles)</th>
+</tr>
+<tr>
+<td>LinReg_1</td>
+<td>main.cpp:237:2</td>
+<td>x_V</td>
+<td>((datalen*32)) * 4</td>
+<td>PHYSICAL_CONTIGUOUS</td>
+<td>27262976</td>
+<td>27262976</td>
+</tr>
+<td></td>
+<td></td>
+<td>a_V_PORTA</td>
+<td>1280</td>
+<td>PHYSICAL_CONTIGUOUS</td>
+<td>4160</td>
+<td>4160</td>
+</tr>
+<td></td>
+<td></td>
+<td>b_V_PORTA</td>
+<td>40</td>
+<td>PHYSICAL_CONTIGUOUS</td>
+<td>130</td>
+<td>130</td>
+</tr>
+<td></td>
+<td></td>
+<td>output_V</td>
+<td>((datalen*10)) * 4</td>
+<td>PHYSICAL_CONTIGUOUS</td>
+<td>27262976</td>
+<td>27262976</td>
+</tr>
+<td></td>
+<td></td>
+<td>datalen</td>
+<td>4</td>
+<td>paged</td>
+<td>0</td>
+<td>13</td>
+</tr>
+<tr>
+<td>RandomProjection_1</td>
+<td>main.cpp:233:2</td>
+<td>x_V</td>
+<td>((datalen*128)) * 4</td>
+<td>PHYSICAL_CONTIGUOUS</td>
+<td>27262976</td>
+<td>27262976</td>
+</tr>
+<td></td>
+<td></td>
+<td>output_V</td>
+<td>((datalen*32)) * 4</td>
+<td>PHYSICAL_CONTIGUOUS</td>
+<td>27262976</td>
+<td>27262976</td>
+</tr>
+<td></td>
+<td></td>
+<td>datalen</td>
+<td>4</td>
+<td>paged</td>
+<td>0</td>
+<td>13</td>
+</tr>
+</table>
+</body>
+</html>
