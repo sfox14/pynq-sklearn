@@ -8,6 +8,7 @@ import numpy as np
 import time
 import ctypes
 
+from pynq.xlnk import ContiguousArray
 from ..base import PynqMixin
 from sklearn.linear_model import LinearRegression
 
@@ -16,9 +17,10 @@ BIT_DIR = os.path.join(ROOT_DIR, "..", "bitstreams")
 LIB_DIR = os.path.join(ROOT_DIR, "..", "libraries")
 BIT_WIDTH = 32
 FRAC_WIDTH = 20
-MAX_OUT = 1000
+MAX_OUT = 10000
 
 
+# noinspection PyInterpreter
 class PynqLinearRegression(PynqMixin, LinearRegression):
 	"""
 		Ordinary least squares Linear Regression. Includes the option of
@@ -50,65 +52,93 @@ class PynqLinearRegression(PynqMixin, LinearRegression):
 		# print("{} = {}".format(arg, val))
 
 		""" properties of fixed hw accelerator """
-		hwargs = {"bitstream": os.path.join(BIT_DIR, "linear_32_10_sg.bit"),
-				  "library": os.path.join(LIB_DIR, "liblreg_32_10_sg.so")}
-		self.input_width = 32
-		self.output_width = 10
-
+		#self.bitstream = os.path.join(BIT_DIR, "linear_32_10_sg.bit")
+		#self.library = os.path.join(LIB_DIR, "liblreg_32_10_sg.so")
+		self.bitstream = os.path.join(BIT_DIR, "multi_sg.bit")
+		self.library = os.path.join(LIB_DIR, "libmulti_sg.so")
+		hwargs = {"bitstream": self.bitstream,
+				  "library": self.library}
+		
 		""" multiple inheritance """
 		super(PynqLinearRegression, self).__init__(**hwargs, **kwargs)
+		
+		self.n_features = 32
+		self.n_targets = 10
+		self.hw_accel = hw_accel
+		
 
 	def fit(self, x, y):
 		""" Default SW fit() """
 		super(PynqLinearRegression, self).fit(x, y)
 
 		""" HW post processing """
-		if self.hw_accel:
-			if self.check_array(x, y) is not True:
-				raise ValueError("HW Accelerator does not fit the input data")
-
 		# copy to xlnk cma buffer
+		
 		self.coef_hw = self.copy_array(self.coef_ * (1<<FRAC_WIDTH),
 									   dtype=np.int32)
-		self.intercept_hw = self.copy_array(self.intercept_*(1<<FRAC_WIDTH),
+		
+		self.intercept_hw = self.copy_array((self.intercept_*(
+				1<<FRAC_WIDTH)).reshape(-1,1),
 									   dtype=np.int32)
 
 		# allocate outBuffer
-		self.outBuffer = self.xlnk.cma_array(shape=(MAX_OUT * 10),
+		self.outBuffer = self.xlnk.cma_array(shape=(MAX_OUT,self.n_targets),
 											 dtype=np.int32)
 		return
 
 	def predict(self, x):
 		if self.hw_accel:
-			datalen = int( len(x)/self.input_width )
-			# HW is limited to batch size = 1000
-			if datalen > 1000:
-				raise RuntimeError("Batch size exceeds HW accelerator")
+		
+			""" Two options for HW predict:
+			#1.	Fast (AXI_DMA_SIMPLE)
+			---------------------
+			x: xlnk.cma_array()
+			return:	xlnk.cma_array()
+			
+			#2. Slow (AXI_DMA_SG)
+			-----------------
+			x: np.array(shape=())
+			return: xlnk.cma_array()
+			
+			** requires x.flatten()
+			"""
+			datalen = len(x)
+			if datalen > MAX_OUT:
+				raise RuntimeError("Buffer overflow: outBuffer required "
+								   "exceeds MAX_OUT")
+			if isinstance(x, ContiguousArray) and x.pointer:
+				inBuffer = x.pointer
+			else:
+				if self.bitstream[-7:] != "_sg.bit":
+					raise RuntimeError("Contiguous array required")
+				xin = x.flatten()
+				if xin.dtype != np.int32:
+					# convert to fixed point
+					xin = (xin*(1<<FRAC_WIDTH)).astype(np.int32)
+				inBuffer = self._ffi.cast("int *", xin.ctypes.data)
+			
 			self.run(self.coef_hw.pointer, self.intercept_hw.pointer,
-					 x.pointer, self.outBuffer.pointer, datalen)
-			return self.outBuffer[:datalen * self.output_width].reshape(-1,
-															self.output_width)
+					 inBuffer, self.outBuffer.pointer, datalen)
+			
+			#return self.xlnk.cma_array(shape=(datalen, self.n_targets),
+			#						   dtype=np.int32,
+			#						   pointer=self.outBuffer.pointer)
+			#return self.outBuffer[:datalen]
+			#return self.outBuffer
+			
+			# Make sure we return a ContiguousArray with pointer
+			view = self.outBuffer[:datalen].view(ContiguousArray)
+			view.pointer = self.outBuffer.pointer
+			view.return_to = None
+			return view
+			
 		else:
 			return super(PynqLinearRegression, self).predict(x)
-
-	def check_array(self, x, y):
-		assert len(x) == len(y)
-		dlen = len(x)
-		if len(x.flatten()) != dlen * self.input_width or len(y.flatten()) != \
-				dlen * self.output_width:
-			return False
-		else:
-			return True
 
 	@property
 	def ffi_interface(self):
 		return """ void _p0_LinReg_1_noasync(int *x, int a[320], int b[10], int *output, int datalen); """
 
-	def config(self):
-		pass
-
-	def preprocess(self):
-		pass
 
 	def run(self, a, b, din, dout, dlen):
 		if any("cdata" not in elem for elem in [str(din), str(a), str(b),

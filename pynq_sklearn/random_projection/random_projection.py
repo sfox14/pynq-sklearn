@@ -8,8 +8,10 @@ import numpy as np
 import time
 import ctypes
 
+from pynq.xlnk import ContiguousArray
 from ..base import PynqMixin
 from sklearn.random_projection import SparseRandomProjection
+from sklearn.base import BaseEstimator
 
 ROOT_DIR = os.path.dirname(os.path.realpath(__file__))
 BIT_DIR = os.path.join(ROOT_DIR, "..", "bitstreams")
@@ -79,8 +81,8 @@ class PynqBinaryRandomProjection(PynqMixin, SparseRandomProjection):
 	"""
 		Dimensionality reduction through binary random projection.
 
-		A Binary Random Projection is one case of Sparse Random Projection
-		where the density parameter equals 1, i.e. s=1. This class
+		A Binary Random Projection is a special case of Sparse Random
+		Projection where the density parameter equals 1, i.e. s=1. This class
 		offloads the computation, i.e. transform(), to programmable logic
 		on the PYNQ-Z1.
 
@@ -101,10 +103,12 @@ class PynqBinaryRandomProjection(PynqMixin, SparseRandomProjection):
 		Attributes
 		----------
 		components_ : Matrix with shape [n_components, n_features]
-			Random binary matrix used for projection (replication of hardware)
+			Random binary matrix used for projection (replication of
+			hardware). Our hardware accelerator is limited to problems with
+			n_features=128 and n_components=32.
 	"""
 
-	def __init__(self, **kwargs):
+	def __init__(self, hw_accel=True, **kwargs):
 
 		""" set attributes """
 		args, _, _, values = inspect.getargvalues(inspect.currentframe())
@@ -113,15 +117,19 @@ class PynqBinaryRandomProjection(PynqMixin, SparseRandomProjection):
 			setattr(self, arg, val)
 
 		""" properties of fixed hw accelerator """
-		hwargs = {"bitstream": os.path.join(BIT_DIR, "rp_128_32.bit"),
-				  "library": os.path.join(LIB_DIR, "librp_128_32.so")}
+		# self.bitstream = os.path.join(BIT_DIR, "linear_32_10_sg.bit")
+		# self.library = os.path.join(LIB_DIR, "liblreg_32_10_sg.so")
+		self.bitstream = os.path.join(BIT_DIR, "multi_sg.bit")
+		self.library = os.path.join(LIB_DIR, "libmulti_sg.so")
+		hwargs = {"bitstream": self.bitstream,
+				  "library": self.library}
 
 		""" multiple inheritance """
 		super(PynqBinaryRandomProjection, self).__init__(**hwargs, **kwargs)
 
 		self.n_features = 128
 		self.n_components = 32
-		self.hw_accel = True
+		self.hw_accel = hw_accel
 
 
 	def fit(self, X, y=None):
@@ -130,39 +138,62 @@ class PynqBinaryRandomProjection(PynqMixin, SparseRandomProjection):
 
 		self.components_ = self._make_random_matrix(self.n_features, self.n_components)
 
-		if self.hw_accel:
-			if self.check_array(X, y) is not True:
-				raise ValueError("HW Accelerator does not fit the input data")
-
 		""" HW post processing """
 		# allocate outBuffer
-		self.outBuffer = self.xlnk.cma_array(shape=(MAX_OUT * 10),
+		self.outBuffer = self.xlnk.cma_array(shape=(MAX_OUT, self.n_components),
 											 dtype=np.int32)
 		return self
 
 	def transform(self, x):
 		if self.hw_accel:
-			datalen = int( len(x)/self.n_features )
-			# HW is limited to batch size = 1000
+			
+			""" Two options for HW predict:
+			#1.	Fast (AXI_DMA_SIMPLE)
+			---------------------
+			x: xlnk.cma_array()
+			return:	xlnk.cma_array()
+
+			#2. Slow (AXI_DMA_SG)
+			-----------------
+			x: np.array(shape=())
+			return: xlnk.cma_array()
+
+			** requires x.flatten()
+			"""
+			datalen = len(x)
 			if datalen > MAX_OUT:
-				raise RuntimeError("Batch size exceeds HW accelerator")
-			self.run(x.pointer, self.outBuffer.pointer, datalen)
-			return self.outBuffer[:datalen * self.n_components].reshape(-1,
-															self.n_components)
+				raise RuntimeError("Buffer overflow: outBuffer required "
+								   "exceeds MAX_OUT")
+			if isinstance(x, ContiguousArray) and x.pointer:
+				inBuffer = x.pointer
+			else:
+				if self.bitstream[-7:] != "_sg.bit":
+					raise RuntimeError("Contiguous array required")
+				xin = x.flatten()
+				if xin.dtype != np.int32:
+					# convert to fixed point
+					xin = (xin*(1<<FRAC_WIDTH)).astype(np.int32)
+				inBuffer = self._ffi.cast("int *", xin.ctypes.data)
+
+			self.run(inBuffer, self.outBuffer.pointer, datalen)
+
+			#return self.xlnk.cma_array(shape=(datalen, self.n_components),
+			#						   dtype=np.int32,
+			#						   pointer=self.outBuffer.pointer)
+			# return self.outBuffer[:datalen]
+			# return self.outBuffer
+			
+			# Make sure we return a ContiguousArray with pointer
+			view = self.outBuffer[:datalen].view(ContiguousArray)
+			view.pointer = self.outBuffer.pointer
+			view.return_to = None
+			return view
+	
 		else:
 			return super(PynqBinaryRandomProjection, self).transform(x)
 
 	def _make_random_matrix(self, n_components, n_features):
 		return binary_random_matrix(n_components, n_features)
-
-	def check_array(self, x, y):
-		assert len(x) == len(y)
-		dlen = len(x)
-		if len(x.flatten()) != dlen * self.n_features or len(y.flatten()) != \
-				dlen * self.n_components:
-			return False
-		else:
-			return True
 
 	@property
 	def ffi_interface(self):
