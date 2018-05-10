@@ -1,3 +1,5 @@
 from .linear import PynqLinearRegression
+from .linear_classification import PynqLogisticRegression
 
-__all__ = ["PynqLinearRegression"]
+__all__ = ["PynqLinearRegression",
+           "PynqLogisticRegression"]
