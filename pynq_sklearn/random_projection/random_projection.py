@@ -108,7 +108,8 @@ class PynqBinaryRandomProjection(PynqMixin, SparseRandomProjection):
 			n_features=128 and n_components=32.
 	"""
 
-	def __init__(self, hw_accel=True, **kwargs):
+	def __init__(self, hw_accel=True, pipe_enable=False, pipe_params=None,
+				 **kwargs):
 
 		""" set attributes """
 		args, _, _, values = inspect.getargvalues(inspect.currentframe())
@@ -117,10 +118,10 @@ class PynqBinaryRandomProjection(PynqMixin, SparseRandomProjection):
 			setattr(self, arg, val)
 
 		""" properties of fixed hw accelerator """
-		# self.bitstream = os.path.join(BIT_DIR, "linear_32_10_sg.bit")
-		# self.library = os.path.join(LIB_DIR, "liblreg_32_10_sg.so")
 		self.bitstream = os.path.join(BIT_DIR, "multi_sg.bit")
 		self.library = os.path.join(LIB_DIR, "libmulti_sg.so")
+		#self.bitstream = os.path.join(BIT_DIR, "pipe_sg.bit")
+		#self.library = os.path.join(LIB_DIR, "libpipe_sg.so")
 		hwargs = {"bitstream": self.bitstream,
 				  "library": self.library}
 
@@ -130,6 +131,11 @@ class PynqBinaryRandomProjection(PynqMixin, SparseRandomProjection):
 		self.n_features = 128
 		self.n_components = 32
 		self.hw_accel = hw_accel
+
+		# pipeline control variables
+		self.pipe_params = pipe_params
+		self.pipe_bypass = False
+		self.pipe_enable = pipe_enable
 
 
 	def fit(self, X, y=None):
@@ -146,20 +152,10 @@ class PynqBinaryRandomProjection(PynqMixin, SparseRandomProjection):
 
 	def transform(self, x):
 		if self.hw_accel:
-			
-			""" Two options for HW predict:
-			#1.	Fast (AXI_DMA_SIMPLE)
-			---------------------
-			x: xlnk.cma_array()
-			return:	xlnk.cma_array()
 
-			#2. Slow (AXI_DMA_SG)
-			-----------------
-			x: np.array(shape=())
-			return: xlnk.cma_array()
+			if self.pipe_bypass:
+				return x
 
-			** requires x.flatten()
-			"""
 			datalen = len(x)
 			if datalen > MAX_OUT:
 				raise RuntimeError("Buffer overflow: outBuffer required "
@@ -175,29 +171,28 @@ class PynqBinaryRandomProjection(PynqMixin, SparseRandomProjection):
 					xin = (xin*(1<<FRAC_WIDTH)).astype(np.int32)
 				inBuffer = self._ffi.cast("int *", xin.ctypes.data)
 
-			self.run(inBuffer, self.outBuffer.pointer, datalen)
-
-			#return self.xlnk.cma_array(shape=(datalen, self.n_components),
-			#						   dtype=np.int32,
-			#						   pointer=self.outBuffer.pointer)
-			# return self.outBuffer[:datalen]
-			# return self.outBuffer
-			
+			if self.pipe_enable:
+				self.pipeline(inBuffer, self.pipeBuffer.pointer, datalen)
+				return self.pipeBuffer[:datalen]
+			else:
+				self.run(inBuffer, self.outBuffer.pointer, datalen)
+		
 			# Make sure we return a ContiguousArray with pointer
 			view = self.outBuffer[:datalen].view(ContiguousArray)
 			view.pointer = self.outBuffer.pointer
 			view.return_to = None
 			return view
-	
 		else:
 			return super(PynqBinaryRandomProjection, self).transform(x)
+
 
 	def _make_random_matrix(self, n_components, n_features):
 		return binary_random_matrix(n_components, n_features)
 
 	@property
 	def ffi_interface(self):
-		return """ void _p0_RandomProjection_1_noasync(int *x, int *output, int datalen); """
+		return """ 	void _p0_RandomProjection_1_noasync(int *x, int *output, int datalen);
+		 			void _p0_Pipe_1_noasync(int *x, int a[320], int b[10], int *output, int datalen); """
 
 
 	def run(self, din, dout, dlen):
@@ -205,3 +200,36 @@ class PynqBinaryRandomProjection(PynqMixin, SparseRandomProjection):
 			raise RuntimeError("Unknown buffer type!")
 		self.interface._p0_RandomProjection_1_noasync(din, dout, dlen)
 
+
+	def pipeline(self, din, dout, dlen):
+		if any("cdata" not in elem for elem in [str(din),
+												str(self.pipe_params["a"]),
+												str(self.pipe_params["b"]),
+												str(dout)]):
+			raise RuntimeError("Unknown buffer type!")
+		self.interface._p0_Pipe_1_noasync(din, self.pipe_params["a"],
+										  self.pipe_params["b"], dout, dlen)
+	
+	# override set_params
+	def set_params(self, verbose=False, **params):
+		super(PynqBinaryRandomProjection, self).set_params(**params)
+
+		stage1 = False
+		self.pipe_bypass = False
+		# configure the pipeline
+		if self.pipe_enable:
+			# configure the outBuffer of the pipeline
+			if self.pipe_params is not None:
+				n_out = self.pipe_params["n_out"]
+				self.pipeBuffer = self.xlnk.cma_array(shape=(MAX_OUT, n_out),
+													  dtype=np.int32)
+				stage1 = True
+			else:
+				self.pipe_bypass = True
+
+		# print verbose messages
+		if verbose:
+			if stage1:
+				print("stage1: ", self.__class__.__name__)
+			if self.pipe_bypass:
+				print("bypass: ", self.__class__.__name__)

@@ -38,7 +38,7 @@ void Pipe(data_t *x, coef_t a[n_outputs*n_components], coef_t b[n_outputs],
 	coef_t amem[n_outputs][n_components], bmem[n_outputs];
 
 	// load weights and biases
-	iter = 2; //datalen;
+	iter = datalen;
 	for (int i=0; i<n_outputs; i++) {
 		for (int j=0; j<n_components; j++) {
 #pragma HLS PIPELINE

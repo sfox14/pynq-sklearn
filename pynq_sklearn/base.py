@@ -23,12 +23,6 @@ class PynqMixin(metaclass=abc.ABCMeta):
         self._ffi.cdef(self.ffi_interface)
         self.xlnk = Xlnk()
 
-    def reset(self):
-        """ Reset all CMA Buffers """
-        xlnk = Xlnk()
-        xlnk.xlnk_reset()
-        return
-
     def copy_array(self, X, dtype=np.int32):
         """
         :param X: np.array
@@ -42,5 +36,12 @@ class PynqMixin(metaclass=abc.ABCMeta):
     @abc.abstractmethod
     def ffi_interface(self):
         pass
+    
+    @abc.abstractmethod
+    def run(self, **params):
+        pass
 
-   
+    @abc.abstractmethod
+    def pipeline(self, **params):
+        pass
+

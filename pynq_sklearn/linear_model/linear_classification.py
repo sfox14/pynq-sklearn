@@ -43,7 +43,8 @@ class PynqLogisticRegression(PynqMixin, LogisticRegression):
 			Independent term in the linear model
 	"""
 
-	def __init__(self, hw_accel=True, **kwargs):
+	def __init__(self, hw_accel=True, pipe_enable=False, pipe_params=None,
+				 **kwargs):
 
 		""" set attributes automatically """
 		args, _, _, values = inspect.getargvalues(inspect.currentframe())
@@ -53,19 +54,23 @@ class PynqLogisticRegression(PynqMixin, LogisticRegression):
 		# print("{} = {}".format(arg, val))
 
 		""" properties of fixed hw accelerator """
-		#self.bitstream = os.path.join(BIT_DIR, "linear_32_10_sg.bit")
-		#self.library = os.path.join(LIB_DIR, "liblreg_32_10_sg.so")
-		self.bitstream = os.path.join(BIT_DIR, "multi.bit")
-		self.library = os.path.join(LIB_DIR, "libmulti.so")
-		hwargs = {"bitstream": self.bitstream,
-				  "library": self.library}
-		
+		self.bitstream = os.path.join(BIT_DIR, "multi_sg.bit")
+		self.library = os.path.join(LIB_DIR, "libmulti_sg.so")
+		#self.bitstream = os.path.join(BIT_DIR, "pipe_sg.bit")
+		#self.library = os.path.join(LIB_DIR, "libpipe_sg.so")
+		hwargs = {"bitstream": self.bitstream,"library": self.library}
+
 		""" multiple inheritance """
 		super(PynqLogisticRegression, self).__init__(**hwargs, **kwargs)
-		
+
 		self.n_features = 32
 		self.n_classes = 10
 		self.hw_accel = hw_accel
+
+		# pipeline control variables
+		self.pipe_params = pipe_params
+		self.pipe_bypass = False
+		self.pipe_enable = pipe_enable
 		
 
 	def fit(self, x, y):
@@ -89,20 +94,10 @@ class PynqLogisticRegression(PynqMixin, LogisticRegression):
 
 	def decision_function(self, x):
 		if self.hw_accel:
-		
-			""" Two options for HW decision function:
-			#1.	Fast (AXI_DMA_SIMPLE)
-			---------------------
-			x: xlnk.cma_array()
-			return:	xlnk.cma_array()
-			
-			#2. Slow (AXI_DMA_SG)
-			-----------------
-			x: np.array(shape=())
-			return: xlnk.cma_array()
-			
-			** requires x.flatten()
-			"""
+
+			if self.pipe_bypass:
+				return x
+
 			datalen = len(x)
 			if datalen > MAX_OUT:
 				raise RuntimeError("Buffer overflow: outBuffer required "
@@ -117,19 +112,15 @@ class PynqLogisticRegression(PynqMixin, LogisticRegression):
 					# convert to fixed point
 					xin = (xin*(1<<FRAC_WIDTH)).astype(np.int32)
 				inBuffer = self._ffi.cast("int *", xin.ctypes.data)
-			
-			self.run(self.coef_hw.pointer, self.intercept_hw.pointer,
-					 inBuffer, self.outBuffer.pointer, datalen)
-			
-			#return self.xlnk.cma_array(shape=(datalen, self.n_classes),
-			#						   dtype=np.int32,
-			#						   pointer=self.outBuffer.pointer)
+
+			if self.pipe_enable:
+				self.pipeline(inBuffer, self.pipeBuffer.pointer, datalen)
+				return self.pipeBuffer[:datalen]
+			else:
+				self.run(self.coef_hw.pointer, self.intercept_hw.pointer,
+						 inBuffer, self.outBuffer.pointer, datalen)
+
 			return self.outBuffer[:datalen]
-			#return self.outBuffer
-			
-			# from linear_model/base.py LinearClassifierMixin
-			#out = self.outBuffer[:datalen].ravel() if self.outBuffer.shape[
-			#	1] == 1 else self.outBuffer[:datalen]
 			
 			# Make sure we return a ContiguousArray with pointer
 			#view = out.view(ContiguousArray)
@@ -142,7 +133,8 @@ class PynqLogisticRegression(PynqMixin, LogisticRegression):
 
 	@property
 	def ffi_interface(self):
-		return """ void _p0_LinReg_1_noasync(int *x, int a[320], int b[10], int *output, int datalen); """
+		return """ void _p0_LinReg_1_noasync(int *x, int a[320], int b[10], int *output, int datalen); 
+		void _p0_Pipe_1_noasync(int *x, int a[320], int b[10], int *output, int datalen); """
 
 
 	def run(self, a, b, din, dout, dlen):
@@ -151,3 +143,36 @@ class PynqLogisticRegression(PynqMixin, LogisticRegression):
 			raise RuntimeError("Unknown buffer type!")
 		self.interface._p0_LinReg_1_noasync(din, a, b, dout, dlen)
 
+
+	def pipeline(self, din, dout, dlen):
+		if any("cdata" not in elem for elem in [str(din),
+												str(self.pipe_params["a"]),
+												str(self.pipe_params["b"]),
+												str(dout)]):
+			raise RuntimeError("Unknown buffer type!")
+		self.interface._p0_Pipe_1_noasync(din, self.pipe_params["a"],
+										  self.pipe_params["b"], dout, dlen)
+
+	# override set_params
+	def set_params(self, verbose=False, **params):
+		super(PynqLogisticRegression, self).set_params(**params)
+
+		stage1 = False
+		self.pipe_bypass = False
+		# configure the pipeline
+		if self.pipe_enable:
+			# configure the outBuffer of the pipeline
+			if self.pipe_params is not None:
+				n_out = self.pipe_params["n_out"]
+				self.pipeBuffer = self.xlnk.cma_array(shape=(MAX_OUT, n_out),
+													  dtype=np.int32)
+				stage1=True
+			else:
+				self.pipe_bypass=True
+
+		# print verbose messages
+		if verbose:
+			if stage1:
+				print("stage1: ", self.__class__.__name__)
+			if self.pipe_bypass:
+				print("bypass: ", self.__class__.__name__)
