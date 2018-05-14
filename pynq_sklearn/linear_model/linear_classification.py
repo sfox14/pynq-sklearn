@@ -10,6 +10,7 @@ import ctypes
 
 from pynq.xlnk import ContiguousArray
 from ..base import PynqMixin
+from ..register import HybridLibrary
 from sklearn.linear_model import LogisticRegression
 
 ROOT_DIR = os.path.dirname(os.path.realpath(__file__))
@@ -43,10 +44,17 @@ class PynqLogisticRegression(PynqMixin, LogisticRegression):
 			Independent term in the linear model
 	"""
 
-	def __init__(self, hw_accel=True, pipe_enable=False, pipe_params=None,
-				 **kwargs):
+	def __init__(self, hw=None, hw_accel=True, pipe_enable=False,
+				 pipe_params=None, **kwargs):
 
-		""" set attributes automatically """
+		if hw is None or not isinstance(hw, HybridLibrary):
+			raise AttributeError("argument 'hw' is required but not found")
+
+		if not isinstance(hw, HybridLibrary):
+			raise AttributeError("hw of type 'HybridLibrary' required but %s "
+								 "found" %(type(hw)))
+
+		""" set attributes """
 		args, _, _, values = inspect.getargvalues(inspect.currentframe())
 		values.pop("self")
 		for arg, val in values.items():
@@ -54,23 +62,21 @@ class PynqLogisticRegression(PynqMixin, LogisticRegression):
 		# print("{} = {}".format(arg, val))
 
 		""" properties of fixed hw accelerator """
-		self.bitstream = os.path.join(BIT_DIR, "multi_sg.bit")
-		self.library = os.path.join(LIB_DIR, "libmulti_sg.so")
-		#self.bitstream = os.path.join(BIT_DIR, "pipe_sg.bit")
-		#self.library = os.path.join(LIB_DIR, "libpipe_sg.so")
-		hwargs = {"bitstream": self.bitstream,"library": self.library}
+		bitstream = os.path.join(BIT_DIR, self.hw.bitstream)
+		library = os.path.join(LIB_DIR, self.hw.library)
+		hwargs = {"bitstream": bitstream, "library": library}
 
 		""" multiple inheritance """
 		super(PynqLogisticRegression, self).__init__(**hwargs, **kwargs)
 
-		self.n_features = 32
-		self.n_classes = 10
+		self.n_features = self.hw.input_width
+		self.n_classes = self.hw.output_width
 		self.hw_accel = hw_accel
 
 		# pipeline control variables
 		self.pipe_params = pipe_params
 		self.pipe_bypass = False
-		self.pipe_enable = pipe_enable
+		#self.pipe_enable = pipe_enable
 		
 
 	def fit(self, x, y):
@@ -84,11 +90,10 @@ class PynqLogisticRegression(PynqMixin, LogisticRegression):
 									   dtype=np.int32)
 		
 		self.intercept_hw = self.copy_array((self.intercept_*(
-				1<<FRAC_WIDTH)).reshape(-1,1),
-									   dtype=np.int32)
+				1<<FRAC_WIDTH)).reshape(-1,1), dtype=np.int32)
 
 		# allocate outBuffer
-		self.outBuffer = self.xlnk.cma_array(shape=(MAX_OUT,self.n_classes),
+		self.outBuffer = self.xlnk.cma_array(shape=(MAX_OUT, self.n_classes),
 											 dtype=np.int32)
 		return
 
@@ -105,7 +110,7 @@ class PynqLogisticRegression(PynqMixin, LogisticRegression):
 			if isinstance(x, ContiguousArray) and x.pointer:
 				inBuffer = x.pointer
 			else:
-				if self.bitstream[-7:] != "_sg.bit":
+				if not self.hw.dma_sg:
 					raise RuntimeError("Contiguous array required")
 				xin = x.flatten()
 				if xin.dtype != np.int32:
@@ -113,7 +118,7 @@ class PynqLogisticRegression(PynqMixin, LogisticRegression):
 					xin = (xin*(1<<FRAC_WIDTH)).astype(np.int32)
 				inBuffer = self._ffi.cast("int *", xin.ctypes.data)
 
-			if self.pipe_enable:
+			if self.hw.pipe:
 				self.pipeline(inBuffer, self.pipeBuffer.pointer, datalen)
 				return self.pipeBuffer[:datalen]
 			else:
@@ -153,26 +158,23 @@ class PynqLogisticRegression(PynqMixin, LogisticRegression):
 		self.interface._p0_Pipe_1_noasync(din, self.pipe_params["a"],
 										  self.pipe_params["b"], dout, dlen)
 
-	# override set_params
-	def set_params(self, verbose=False, **params):
-		super(PynqLogisticRegression, self).set_params(**params)
 
-		stage1 = False
+	# We override "set_params" to configure and implement a hardware
+	# pipeline using scikit-learn's Pipeline class. This function can be
+	# used as a template, and copied for any PYNQ scikit-learn estimator.
+	def set_params(self, **params):
+		super(self.__class__, self).set_params(**params)
+
 		self.pipe_bypass = False
 		# configure the pipeline
-		if self.pipe_enable:
+		if self.hw.pipe:
 			# configure the outBuffer of the pipeline
 			if self.pipe_params is not None:
 				n_out = self.pipe_params["n_out"]
 				self.pipeBuffer = self.xlnk.cma_array(shape=(MAX_OUT, n_out),
 													  dtype=np.int32)
-				stage1=True
+				print("stage1: 	", self.__class__.__name__)
 			else:
-				self.pipe_bypass=True
+				self.pipe_bypass = True
+				print("sw bypass: 	", self.__class__.__name__)
 
-		# print verbose messages
-		if verbose:
-			if stage1:
-				print("stage1: ", self.__class__.__name__)
-			if self.pipe_bypass:
-				print("bypass: ", self.__class__.__name__)

@@ -10,6 +10,7 @@ import ctypes
 
 from pynq.xlnk import ContiguousArray
 from ..base import PynqMixin
+from ..register import HybridLibrary
 from sklearn.random_projection import SparseRandomProjection
 from sklearn.base import BaseEstimator
 
@@ -108,8 +109,15 @@ class PynqBinaryRandomProjection(PynqMixin, SparseRandomProjection):
 			n_features=128 and n_components=32.
 	"""
 
-	def __init__(self, hw_accel=True, pipe_enable=False, pipe_params=None,
-				 **kwargs):
+	def __init__(self, n_components=32, hw=None, hw_accel=True, pipe_enable=False,
+				 pipe_params=None, **kwargs):
+
+		if hw is None or not isinstance(hw, HybridLibrary):
+			raise AttributeError("argument 'hw' is required but not found")
+
+		if not isinstance(hw, HybridLibrary):
+			raise AttributeError("hw of type 'HybridLibrary' required but %s "
+								 "found" %(type(hw)))
 
 		""" set attributes """
 		args, _, _, values = inspect.getargvalues(inspect.currentframe())
@@ -118,24 +126,21 @@ class PynqBinaryRandomProjection(PynqMixin, SparseRandomProjection):
 			setattr(self, arg, val)
 
 		""" properties of fixed hw accelerator """
-		self.bitstream = os.path.join(BIT_DIR, "multi_sg.bit")
-		self.library = os.path.join(LIB_DIR, "libmulti_sg.so")
-		#self.bitstream = os.path.join(BIT_DIR, "pipe_sg.bit")
-		#self.library = os.path.join(LIB_DIR, "libpipe_sg.so")
-		hwargs = {"bitstream": self.bitstream,
-				  "library": self.library}
+		bitstream = os.path.join(BIT_DIR, self.hw.bitstream)
+		library = os.path.join(LIB_DIR, self.hw.library)
+		hwargs = {"bitstream": bitstream, "library": library}
 
 		""" multiple inheritance """
 		super(PynqBinaryRandomProjection, self).__init__(**hwargs, **kwargs)
 
-		self.n_features = 128
-		self.n_components = 32
+		self.n_features = self.hw.input_width
+		self.n_components = n_components
 		self.hw_accel = hw_accel
 
 		# pipeline control variables
 		self.pipe_params = pipe_params
 		self.pipe_bypass = False
-		self.pipe_enable = pipe_enable
+		#self.pipe_enable = pipe_enable
 
 
 	def fit(self, X, y=None):
@@ -146,7 +151,8 @@ class PynqBinaryRandomProjection(PynqMixin, SparseRandomProjection):
 
 		""" HW post processing """
 		# allocate outBuffer
-		self.outBuffer = self.xlnk.cma_array(shape=(MAX_OUT, self.n_components),
+		self.outBuffer = self.xlnk.cma_array(shape=(MAX_OUT,
+													self.hw.output_width),
 											 dtype=np.int32)
 		return self
 
@@ -163,7 +169,7 @@ class PynqBinaryRandomProjection(PynqMixin, SparseRandomProjection):
 			if isinstance(x, ContiguousArray) and x.pointer:
 				inBuffer = x.pointer
 			else:
-				if self.bitstream[-7:] != "_sg.bit":
+				if not self.hw.dma_sg:
 					raise RuntimeError("Contiguous array required")
 				xin = x.flatten()
 				if xin.dtype != np.int32:
@@ -171,7 +177,7 @@ class PynqBinaryRandomProjection(PynqMixin, SparseRandomProjection):
 					xin = (xin*(1<<FRAC_WIDTH)).astype(np.int32)
 				inBuffer = self._ffi.cast("int *", xin.ctypes.data)
 
-			if self.pipe_enable:
+			if self.hw.pipe:
 				self.pipeline(inBuffer, self.pipeBuffer.pointer, datalen)
 				return self.pipeBuffer[:datalen]
 			else:
@@ -191,8 +197,9 @@ class PynqBinaryRandomProjection(PynqMixin, SparseRandomProjection):
 
 	@property
 	def ffi_interface(self):
-		return """ 	void _p0_RandomProjection_1_noasync(int *x, int *output, int datalen);
-		 			void _p0_Pipe_1_noasync(int *x, int a[320], int b[10], int *output, int datalen); """
+		#return self.hw.c_callable
+		return """ void _p0_RandomProjection_1_noasync(int *x, int *output, int datalen); 
+		void _p0_Pipe_1_noasync(int *x, int a[320], int b[10], int *output, int datalen); """
 
 
 	def run(self, din, dout, dlen):
@@ -209,27 +216,23 @@ class PynqBinaryRandomProjection(PynqMixin, SparseRandomProjection):
 			raise RuntimeError("Unknown buffer type!")
 		self.interface._p0_Pipe_1_noasync(din, self.pipe_params["a"],
 										  self.pipe_params["b"], dout, dlen)
-	
-	# override set_params
-	def set_params(self, verbose=False, **params):
-		super(PynqBinaryRandomProjection, self).set_params(**params)
 
-		stage1 = False
+
+	# We override "set_params" to configure and implement a hardware
+	# pipeline using scikit-learn's Pipeline class. This function can be
+	# used as a template, and copied for any PYNQ scikit-learn estimator.
+	def set_params(self, **params):
+		super(self.__class__, self).set_params(**params)
+
 		self.pipe_bypass = False
 		# configure the pipeline
-		if self.pipe_enable:
+		if self.hw.pipe:
 			# configure the outBuffer of the pipeline
 			if self.pipe_params is not None:
 				n_out = self.pipe_params["n_out"]
 				self.pipeBuffer = self.xlnk.cma_array(shape=(MAX_OUT, n_out),
 													  dtype=np.int32)
-				stage1 = True
+				print("stage1: 	", self.__class__.__name__)
 			else:
 				self.pipe_bypass = True
-
-		# print verbose messages
-		if verbose:
-			if stage1:
-				print("stage1: ", self.__class__.__name__)
-			if self.pipe_bypass:
-				print("bypass: ", self.__class__.__name__)
+				print("sw bypass: 	", self.__class__.__name__)
