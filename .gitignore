@@ -171,4 +171,4 @@ venv.bak/
 #--------------------
 # SDSoC
 *.dat
-!/pynq_sklearn/libraries/*.so
+!/pynq_sklearn/boards/*/libs/*.so

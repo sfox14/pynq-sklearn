@@ -14,8 +14,8 @@ from ..register import HybridLibrary
 from sklearn.linear_model import LogisticRegression
 
 ROOT_DIR = os.path.dirname(os.path.realpath(__file__))
-BIT_DIR = os.path.join(ROOT_DIR, "..", "bitstreams")
-LIB_DIR = os.path.join(ROOT_DIR, "..", "libraries")
+BIT_DIR = os.path.join(ROOT_DIR, "bitstreams")
+LIB_DIR = os.path.join(ROOT_DIR, "libs")
 BIT_WIDTH = 32
 FRAC_WIDTH = 20
 MAX_OUT = 10000
