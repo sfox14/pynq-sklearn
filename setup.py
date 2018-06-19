@@ -4,7 +4,7 @@ import subprocess
 import site
 import sys
 import shutil
-import ekf
+import pynq_sklearn
 
 
 class BoardSupportError(Exception):
@@ -33,7 +33,7 @@ def exclude_from_dirs(exclude, path):
 
 def collect_sklearn_data_files():
     return [(os.path.join(
-        '{}/ekf'.format(os.path.dirname(site.__file__) \
+        '{}/pynq_sklearn'.format(os.path.dirname(site.__file__) \
              + "/site-packages"), ol),
              [os.path.join(board_folder, ol, f)
               for f in exclude_from_files(
