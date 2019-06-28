@@ -11,3 +11,5 @@ sudo pip3.6 install git+https://github.com/sfox14/pynq-sklearn.git
 ```
 
 This will install the "pynq-sklearn" to your board, and will create the "sklearn" directory in PYNQ_JUPYTER_NOTEBOOKS. Here, you will find notebooks to test the repository.
+
+**Note: Make sure you're using PYNQ v2.1 image**
